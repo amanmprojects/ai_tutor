@@ -5,7 +5,7 @@ import json
 class LLMHandler:
     def __init__(self):
         self.client = Groq(api_key=GROQ_API_KEY)
-        self.model = "mixtral-8x7b-32768"  # Using Mixtral as it's more reliable for structured output
+        self.model = "deepseek-r1-distill-llama-70b" 
 
     def generate_quiz(self, topic: str, difficulty: float) -> list:
         difficulty_level = "beginner" if difficulty < 0.3 else "intermediate" if difficulty < 0.7 else "advanced"
@@ -29,6 +29,8 @@ class LLMHandler:
                 model=self.model,
                 temperature=0.7,
             )
+            with open('quiz_data.txt', 'w') as f:
+                f.write(str(response.choices[0].message.content))
             
             # Try to parse as JSON first
             try:
@@ -90,7 +92,13 @@ class LLMHandler:
                 model=self.model,
                 temperature=0.7,
             )
-            return response.choices[0].message.content.strip()
+            # Extract content without the reasoning part
+            content = response.choices[0].message.content.strip()
+            if '<think>' in content and '</think>' in content:
+                thinking_start = content.find('<think>')
+                thinking_end = content.find('</think>') + len('</think>')
+                content = content[:thinking_start] + content[thinking_end:]
+            return content.strip()
         except Exception as e:
             print(f"Question answering error: {str(e)}")
             return "I'm having trouble processing your question. Please try again."
