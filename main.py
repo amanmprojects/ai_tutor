@@ -16,7 +16,7 @@ async def start(update: Update, context: CallbackContext):
         "Welcome to AI Tutor! 🎓\n\n"
         "Use these commands to interact with me:\n"
         "/learn <topic> - Start learning a new topic\n"
-        "/quiz - Take a quiz on your current topic\n"
+        "/quiz [instructions] - Take a quiz (optionally with specific instructions)\n"
         "/progress - View your learning progress\n"
         "/topics - See your past topics and recommendations\n"
         "/help - Show this help message"
@@ -36,7 +36,7 @@ async def learn(update: Update, context: CallbackContext):
         f"Use /quiz to test your knowledge!"
     )
 
-async def quiz(update: Update, context: CallbackContext):
+async def quiz(update: Update, context: CallbackContext, retry: bool = False):
     user_id = update.message.from_user.id
     topic = db.get_user_topic(user_id)
     
@@ -49,9 +49,15 @@ async def quiz(update: Update, context: CallbackContext):
     progress = db.get_progress(user_id)
     difficulty = progress.get(topic, 0.0)
     
-    quiz_data = llm.generate_quiz(topic, difficulty)
+    # Get optional instructions from the command
+    instructions = " ".join(context.args) if context.args else ""
+    
+    quiz_data = llm.generate_quiz(topic, difficulty, instructions)
     if not quiz_data:
-        await update.message.reply_text("Sorry, I couldn't generate a quiz right now. Please try again.")
+        if not retry:
+            await quiz(update, context, retry=True)
+        else:
+            await update.message.reply_text("Sorry, I couldn't generate a quiz right now. Please try again.")
         return
 
     context.user_data['quiz'] = quiz_data
@@ -95,20 +101,36 @@ async def button_callback(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
     
-    _, q_num, ans = query.data.split('_')
-    q_num, ans = int(q_num), int(ans)
+    data = query.data.split('_')
+    action = data[0]
     
-    if ans == context.user_data['quiz'][q_num]['correct_answer']:
-        context.user_data['score'] += 1
-        await query.message.reply_text("✅ Correct!")
-    else:
-        correct = context.user_data['quiz'][q_num]['options'][
-            context.user_data['quiz'][q_num]['correct_answer']
-        ]
-        await query.message.reply_text(f"❌ Wrong! The correct answer was: {correct}")
-    
-    context.user_data['current_question'] += 1
-    await send_question(update, context)
+    if action == 'quiz':
+        _, q_num, ans = data
+        q_num, ans = int(q_num), int(ans)
+        
+        if ans == context.user_data['quiz'][q_num]['correct_answer']:
+            context.user_data['score'] += 1
+            await query.message.reply_text("✅ Correct!")
+        else:
+            correct = context.user_data['quiz'][q_num]['options'][
+                context.user_data['quiz'][q_num]['correct_answer']
+            ]
+            await query.message.reply_text(f"❌ Wrong! The correct answer was: {correct}")
+        
+        context.user_data['current_question'] += 1
+        await send_question(update, context)
+    elif action == 'learn':
+        topic_idx = int(data[1])
+        # Get the topic from user_data or use default topics
+        topics = context.user_data.get('recommended_topics', ["Python", "JavaScript", "Machine Learning"])
+        if topic_idx < len(topics):
+            topic = topics[topic_idx]
+            user_id = update.effective_user.id
+            normalized_topic = db.set_user_topic(user_id, topic)
+            await query.message.reply_text(
+                f"Great! You're now learning {normalized_topic}. "
+                f"Use /quiz to test your knowledge!"
+            )
 
 async def progress(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
@@ -129,30 +151,45 @@ async def progress(update: Update, context: CallbackContext):
 async def topics(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     progress_data = db.get_progress(user_id)
-    past_topics = list(progress_data.keys())
+    past_topics = list(progress_data.keys()) if progress_data else []
     
-    if not past_topics:
-        await update.message.reply_text(
-            "You haven't studied any topics yet! Use /learn <topic> to get started."
-        )
-        return
+    message = "Your Learning History:\n"
+    if past_topics:
+        for topic in past_topics:
+            score = progress_data[topic] * 100
+            level = "🟢" if score >= 70 else "🟡" if score >= 30 else "🔴"
+            message += f"• {topic}: {score:.1f}% {level}\n"
+    else:
+        message += "No topics studied yet.\n"
     
-    recommendations = llm.get_topic_recommendations(past_topics)
-    
-    message = "Your Topics:\n"
-    for topic in past_topics:
-        message += f"• {topic}\n"
-    
-    message += "\nRecommended Topics:\n"
-    keyboard = []
-    for topic in recommendations:
-        message += f"• {topic}\n"
-        keyboard.append([InlineKeyboardButton(
-            f"Learn {topic}", callback_data=f"learn_{topic}"
-        )])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(message, reply_markup=reply_markup)
+    # Get recommendations
+    if past_topics:
+        message += "\nRecommended Topics:\n"
+        recommendations = llm.get_topic_recommendations(past_topics)[:3]  # Limit to 3 recommendations
+        keyboard = []
+        for i, topic in enumerate(recommendations):
+            message += f"• {topic}\n"
+            # Use a simple index as callback data
+            keyboard.append([InlineKeyboardButton(
+                f"Learn {topic}", callback_data=f"learn_{i}"
+            )])
+        
+        if keyboard:  # Only add reply_markup if we have recommendations
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(message, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(message)
+    else:
+        suggestions = ["Python", "JavaScript", "Machine Learning"]  # Default suggestions
+        message += "\nSuggested Topics to Start:\n"
+        keyboard = []
+        for i, topic in enumerate(suggestions):
+            message += f"• {topic}\n"
+            keyboard.append([InlineKeyboardButton(
+                f"Learn {topic}", callback_data=f"learn_{i}"
+            )])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(message, reply_markup=reply_markup)
 
 async def help_command(update: Update, context: CallbackContext):
     await start(update, context)
