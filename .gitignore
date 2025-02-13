@@ -27,3 +27,4 @@ build/
 
 # Local development
 .python-version
+quiz_data.txt
