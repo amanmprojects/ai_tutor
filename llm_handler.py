@@ -7,9 +7,15 @@ class LLMHandler:
         self.client = Groq(api_key=GROQ_API_KEY)
         self.model = "deepseek-r1-distill-llama-70b" 
 
-    def generate_quiz(self, topic: str, difficulty: float) -> list:
+    def generate_quiz(self, topic: str, difficulty: float, instructions: str = "") -> list:
         difficulty_level = "beginner" if difficulty < 0.3 else "intermediate" if difficulty < 0.7 else "advanced"
-        prompt = f"""Generate a quiz about {topic} at {difficulty_level} level. 
+        
+        base_prompt = f"""Generate a quiz about {topic} at {difficulty_level} level."""
+        
+        if instructions:
+            base_prompt += f" Follow these specific instructions: {instructions}"
+            
+        prompt = f"""{base_prompt}
         Create 3 multiple-choice questions. The response must be a valid JSON array of dictionaries.
         Each dictionary must have exactly these keys:
         - 'question': string with the question text
@@ -75,7 +81,7 @@ class LLMHandler:
                 temperature=0.7,
             )
             
-            recommendations = response.choices[0].message.content.strip().split('\n')
+            recommendations = self.strip_reasoning_part(response.choices[0].message.content.strip().split('\n'))
             return [r.strip() for r in recommendations if r.strip()]
         except Exception as e:
             print(f"Recommendation error: {str(e)}")
@@ -94,11 +100,14 @@ class LLMHandler:
             )
             # Extract content without the reasoning part
             content = response.choices[0].message.content.strip()
-            if '<think>' in content and '</think>' in content:
-                thinking_start = content.find('<think>')
-                thinking_end = content.find('</think>') + len('</think>')
-                content = content[:thinking_start] + content[thinking_end:]
-            return content.strip()
+            return self.strip_reasoning_part(content)
         except Exception as e:
             print(f"Question answering error: {str(e)}")
             return "I'm having trouble processing your question. Please try again."
+
+    def strip_reasoning_part(self, text: str) -> str:
+        if '<think>' in text and '</think>' in text:
+            thinking_start = text.find('<think>')
+            thinking_end = text.find('</think>') + len('</think>')
+            return text[:thinking_start] + text[thinking_end:]
+        return text
